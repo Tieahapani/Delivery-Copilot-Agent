@@ -1,0 +1,18 @@
+# OSM and OSRM data files (large)
+data/osrm/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/data/sf_businesses.csv
+dashboard/.sent_events.json
+evals/eval_results.json
+data/manifest.json

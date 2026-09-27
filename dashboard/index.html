@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delivery Copilot — Dispatcher Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: #0f1117;
+            color: #e0e0e0;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ---- Top Bar ---- */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            height: 72px;
+        }
+
+        .top-bar .logo {
+            font-size: 18px;
+            font-weight: 700;
+            color: #58a6ff;
+            white-space: nowrap;
+        }
+
+        .top-bar .logo span {
+            color: #8b949e;
+            font-weight: 400;
+            font-size: 13px;
+            margin-left: 8px;
+        }
+
+        .metrics-row {
+            display: flex;
+            gap: 24px;
+        }
+
+        .metric-card {
+            text-align: center;
+            min-width: 100px;
+        }
+
+        .metric-card .value {
+            font-size: 24px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .metric-card .label {
+            font-size: 11px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .value.green { color: #3fb950; }
+        .value.blue { color: #58a6ff; }
+        .value.orange { color: #d29922; }
+        .value.red { color: #f85149; }
+        .value.white { color: #e6edf3; }
+
+        /* ---- Main Grid ---- */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 320px 1fr 340px;
+            height: calc(100vh - 72px);
+        }
+
+        /* ---- Left Panel: Escalation Queue ---- */
+        .left-panel {
+            background: #161b22;
+            border-right: 1px solid #30363d;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .panel-header {
+            font-size: 14px;
+            font-weight: 600;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-header .count {
+            background: #f85149;
+            color: white;
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .escalation-card {
+            background: #21262d;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 14px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: border-color 0.15s;
+        }
+
+        .escalation-card:hover {
+            border-color: #58a6ff;
+        }
+
+        .escalation-card .card-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .urgency-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .urgency-HIGH { background: #f8514933; color: #f85149; }
+        .urgency-MEDIUM { background: #d2992233; color: #d29922; }
+        .urgency-LOW { background: #3fb95033; color: #3fb950; }
+
+        .card-delivery-id {
+            font-size: 13px;
+            font-weight: 600;
+            color: #e6edf3;
+        }
+
+        .card-body {
+            font-size: 12px;
+            color: #8b949e;
+            line-height: 1.5;
+        }
+
+        .card-body strong {
+            color: #c9d1d9;
+        }
+
+        .card-details {
+            display: none;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #30363d;
+        }
+
+        .card-details.show {
+            display: block;
+        }
+
+        .card-reasoning {
+            font-size: 12px;
+            color: #8b949e;
+            font-style: italic;
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+
+        .card-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .btn-approve {
+            background: #238636;
+            border-color: #238636;
+            color: white;
+        }
+        .btn-approve:hover { background: #2ea043; }
+
+        .btn-override {
+            background: #1f6feb;
+            border-color: #1f6feb;
+            color: white;
+        }
+        .btn-override:hover { background: #388bfd; }
+
+        .btn-dismiss {
+            background: transparent;
+            color: #8b949e;
+        }
+        .btn-dismiss:hover { background: #21262d; color: #c9d1d9; }
+
+        .empty-queue {
+            text-align: center;
+            color: #484f58;
+            padding: 40px 20px;
+            font-size: 14px;
+        }
+
+        /* ---- Center Panel: Map ---- */
+        .center-panel {
+            position: relative;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        .connection-status {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 1000;
+            font-size: 12px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+
+        .status-connected {
+            background: #238636;
+            color: white;
+        }
+
+        .status-disconnected {
+            background: #f85149;
+            color: white;
+        }
+
+        /* ---- Right Panel: Activity Feed ---- */
+        .right-panel {
+            background: #161b22;
+            border-left: 1px solid #30363d;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .feed-entry {
+            display: grid;
+            grid-template-columns: 70px 1fr;
+            gap: 8px;
+            padding: 8px 0;
+            border-bottom: 1px solid #21262d;
+            font-size: 12px;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .feed-time {
+            color: #484f58;
+            font-family: 'SF Mono', 'Menlo', monospace;
+            font-size: 11px;
+        }
+
+        .feed-content {
+            color: #c9d1d9;
+        }
+
+        .feed-content .feed-icon { margin-right: 4px; }
+        .feed-content .feed-id { color: #58a6ff; font-weight: 600; }
+        .feed-content .feed-type { color: #8b949e; }
+        .feed-content .feed-time-taken { color: #484f58; }
+
+        .empty-feed {
+            text-align: center;
+            color: #484f58;
+            padding: 40px 20px;
+            font-size: 14px;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+    </style>
+</head>
+<body>
+
+<!-- ---- Top Bar ---- -->
+<div class="top-bar">
+    <div class="logo">
+        🚛 Delivery Copilot <span>Dispatcher Dashboard</span>
+    </div>
+    <div class="metrics-row">
+        <div class="metric-card">
+            <div class="value blue" id="m-drivers">0</div>
+            <div class="label">Drivers</div>
+        </div>
+        <div class="metric-card">
+            <div class="value white" id="m-deliveries">0</div>
+            <div class="label">Deliveries</div>
+        </div>
+        <div class="metric-card">
+            <div class="value orange" id="m-exceptions">0</div>
+            <div class="label">Exceptions</div>
+        </div>
+        <div class="metric-card">
+            <div class="value green" id="m-sla">100%</div>
+            <div class="label">SLA Rate</div>
+        </div>
+        <div class="metric-card">
+            <div class="value green" id="m-auto">0</div>
+            <div class="label">Auto-Resolved</div>
+        </div>
+        <div class="metric-card">
+            <div class="value red" id="m-pending">0</div>
+            <div class="label">Pending</div>
+        </div>
+        <div class="metric-card">
+            <div class="value white" id="m-avg-time">0s</div>
+            <div class="label">Avg Time</div>
+        </div>
+    </div>
+</div>
+
+<!-- ---- Main Grid ---- -->
+<div class="main-grid">
+
+    <!-- Left: Escalation Queue -->
+    <div class="left-panel">
+        <div class="panel-header">
+            Escalation Queue
+            <span class="count" id="queue-count">0</span>
+        </div>
+        <div id="escalation-list">
+            <div class="empty-queue">No escalations yet.<br>Waiting for events...</div>
+        </div>
+    </div>
+
+    <!-- Center: Map -->
+    <div class="center-panel">
+        <div class="connection-status status-disconnected" id="conn-status">Disconnected</div>
+        <div id="map"></div>
+    </div>
+
+    <!-- Right: Activity Feed -->
+    <div class="right-panel">
+        <div class="panel-header">Activity Feed</div>
+        <div id="activity-feed">
+            <div class="empty-feed">Waiting for events...</div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ================================================================
+// Map Setup
+// ================================================================
+
+const map = L.map('map', {
+    center: [37.7749, -122.4194],  // SF center
+    zoom: 13,
+    zoomControl: false,
+});
+
+// Dark tile layer
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+}).addTo(map);
+
+// Zoom control on the right
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+// Warehouse marker
+const warehouseIcon = L.divIcon({
+    html: '<div style="background:#58a6ff;width:14px;height:14px;border-radius:50%;border:2px solid #0d1117;box-shadow:0 0 8px #58a6ff88;"></div>',
+    className: '',
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+});
+L.marker([37.7327, -122.3914], { icon: warehouseIcon })
+    .addTo(map)
+    .bindPopup('<strong>Bayview Distribution Hub</strong><br>Warehouse');
+
+// Layer groups
+const driverLayer = L.layerGroup().addTo(map);
+const exceptionLayer = L.layerGroup().addTo(map);
+
+// Driver markers storage
+const driverMarkers = {};
+
+function addDriverMarkers(drivers) {
+    drivers.forEach(d => {
+        const icon = L.divIcon({
+            html: `<div style="background:#3fb950;width:10px;height:10px;border-radius:50%;border:2px solid #0d1117;box-shadow:0 0 6px #3fb95088;"></div>`,
+            className: '',
+            iconSize: [10, 10],
+            iconAnchor: [5, 5],
+        });
+        const marker = L.marker([d.lat, d.lon], { icon })
+            .addTo(driverLayer)
+            .bindPopup(`<strong>${d.driver_id}</strong><br>${d.total_stops} stops`);
+        driverMarkers[d.driver_id] = marker;
+    });
+}
+
+function addExceptionMarker(m) {
+    const colors = {
+        HIGH: '#f85149',
+        MEDIUM: '#d29922',
+        LOW: '#3fb950',
+    };
+    const color = colors[m.urgency] || '#d29922';
+    const size = m.urgency === 'HIGH' ? 12 : 9;
+
+    const icon = L.divIcon({
+        html: `<div style="
+            background:${color};
+            width:${size}px;
+            height:${size}px;
+            border-radius:50%;
+            border:2px solid #0d1117;
+            box-shadow:0 0 10px ${color}88;
+            animation: pulse 2s infinite;
+        "></div>
+        <style>
+            @keyframes pulse {
+                0%, 100% { box-shadow: 0 0 6px ${color}44; }
+                50% { box-shadow: 0 0 14px ${color}aa; }
+            }
+        </style>`,
+        className: '',
+        iconSize: [size, size],
+        iconAnchor: [size/2, size/2],
+    });
+
+    const outcomeLabel = m.outcome === 'auto_resolved' ? '✅ Auto-resolved' : '🔴 Escalated';
+
+    L.marker([m.lat, m.lon], { icon })
+        .addTo(exceptionLayer)
+        .bindPopup(`
+            <strong>${m.delivery_id}</strong><br>
+            ${m.exception_type}<br>
+            ${m.business_name}<br>
+            ${outcomeLabel}
+        `);
+}
+
+
+// ================================================================
+// WebSocket
+// ================================================================
+
+let ws;
+let reconnectTimer;
+
+function connect() {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+    ws.onopen = () => {
+        document.getElementById('conn-status').textContent = 'Live';
+        document.getElementById('conn-status').className = 'connection-status status-connected';
+        console.log('WebSocket connected');
+    };
+
+    ws.onclose = () => {
+        document.getElementById('conn-status').textContent = 'Disconnected';
+        document.getElementById('conn-status').className = 'connection-status status-disconnected';
+        console.log('WebSocket disconnected, reconnecting...');
+        reconnectTimer = setTimeout(connect, 3000);
+    };
+
+    ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+    };
+
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        handleMessage(data);
+    };
+}
+
+function handleMessage(data) {
+    switch (data.type) {
+        case 'init':
+            updateFleetMetrics(data.fleet);
+            addDriverMarkers(data.driver_locations || []);
+            (data.exception_markers || []).forEach(addExceptionMarker);
+            renderEscalationQueue(data.escalation_queue || []);
+            renderActivityFeed(data.activity_feed || []);
+            break;
+
+        case 'event_processed':
+            updateFleetMetrics(data.fleet);
+            if (data.marker) addExceptionMarker(data.marker);
+            if (data.feed_entry) prependFeedEntry(data.feed_entry);
+            renderEscalationQueue(data.escalation_queue || []);
+            break;
+
+        case 'escalation_resolved':
+            updateFleetMetrics(data.fleet);
+            if (data.feed_entry) prependFeedEntry(data.feed_entry);
+            renderEscalationQueue(data.escalation_queue || []);
+            break;
+    }
+}
+
+
+// ================================================================
+// UI Updates
+// ================================================================
+
+function updateFleetMetrics(fleet) {
+    document.getElementById('m-drivers').textContent = fleet.active_drivers;
+    document.getElementById('m-deliveries').textContent = fleet.total_deliveries;
+    document.getElementById('m-exceptions').textContent = fleet.exceptions_active;
+
+    const slaEl = document.getElementById('m-sla');
+    slaEl.textContent = fleet.sla_compliance + '%';
+    slaEl.className = 'value ' + (fleet.sla_compliance >= 90 ? 'green' : fleet.sla_compliance >= 80 ? 'orange' : 'red');
+
+    document.getElementById('m-auto').textContent = fleet.auto_resolved;
+    document.getElementById('m-pending').textContent = fleet.pending_escalation;
+    document.getElementById('m-avg-time').textContent = (fleet.avg_resolution_ms / 1000).toFixed(1) + 's';
+}
+
+function renderEscalationQueue(queue) {
+    const container = document.getElementById('escalation-list');
+    const countEl = document.getElementById('queue-count');
+    countEl.textContent = queue.length;
+
+    if (queue.length === 0) {
+        container.innerHTML = '<div class="empty-queue">No escalations pending.<br>All clear! ✅</div>';
+        return;
+    }
+
+    container.innerHTML = queue.map(e => `
+        <div class="escalation-card" onclick="toggleCardDetails('${e.delivery_id}')">
+            <div class="card-top">
+                <span class="card-delivery-id">${e.delivery_id}</span>
+                <span class="urgency-badge urgency-${e.urgency}">${e.urgency}</span>
+            </div>
+            <div class="card-body">
+                <strong>${e.driver_id}</strong> · ${e.exception_type}<br>
+                📍 ${e.business_name || 'Unknown'}<br>
+                📦 ${e.package_priority} · ⏱️ ${Math.round(e.time_to_sla || 0)} min to SLA
+            </div>
+            <div class="card-details" id="details-${e.delivery_id}">
+                <div class="card-reasoning">"${e.reasoning}"</div>
+                <div class="card-body" style="margin-bottom:10px">
+                    <strong>Recommended:</strong> ${e.recommended_action}
+                </div>
+                <div class="card-actions">
+                    <button class="btn btn-approve" onclick="event.stopPropagation(); dispatchAction('approve', '${e.delivery_id}', '${e.exception_type}')">Approve</button>
+                    <button class="btn btn-dismiss" onclick="event.stopPropagation(); dispatchAction('dismiss', '${e.delivery_id}', '${e.exception_type}')">Dismiss</button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function toggleCardDetails(deliveryId) {
+    const el = document.getElementById(`details-${deliveryId}`);
+    if (el) el.classList.toggle('show');
+}
+
+function dispatchAction(action, deliveryId, exceptionType) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            action: action,
+            delivery_id: deliveryId,
+            exception_type: exceptionType,
+        }));
+    }
+}
+
+function renderActivityFeed(entries) {
+    const container = document.getElementById('activity-feed');
+    if (entries.length === 0) {
+        container.innerHTML = '<div class="empty-feed">Waiting for events...</div>';
+        return;
+    }
+    container.innerHTML = entries.slice().reverse().map(formatFeedEntry).join('');
+}
+
+function prependFeedEntry(entry) {
+    const container = document.getElementById('activity-feed');
+    const emptyMsg = container.querySelector('.empty-feed');
+    if (emptyMsg) emptyMsg.remove();
+
+    const html = formatFeedEntry(entry);
+    container.insertAdjacentHTML('afterbegin', html);
+
+    // Keep max 50 entries
+    while (container.children.length > 50) {
+        container.removeChild(container.lastChild);
+    }
+}
+
+function formatFeedEntry(e) {
+    return `
+        <div class="feed-entry">
+            <div class="feed-time">${e.timestamp}</div>
+            <div class="feed-content">
+                <span class="feed-icon">${e.icon}</span>
+                <span class="feed-id">${e.delivery_id}</span>
+                <span class="feed-type">${e.exception_type}</span>
+                <span class="feed-time-taken">${e.processing_time}</span>
+            </div>
+        </div>
+    `;
+}
+
+
+// ================================================================
+// Start
+// ================================================================
+
+connect();
+</script>
+</body>
+</html>

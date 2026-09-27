@@ -1,0 +1,14 @@
+requests
+pandas
+scikit-learn
+numpy
+redis
+langgraph
+langchain-anthropic
+langchain-core
+shapely
+rtree
+python-dotenv
+fastapi 
+uvicorn[standard] 
+websockets 
