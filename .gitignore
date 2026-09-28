@@ -16,3 +16,4 @@ venv/
 dashboard/.sent_events.json
 evals/eval_results.json
 data/manifest.json
+data/sf_businesses.csv
