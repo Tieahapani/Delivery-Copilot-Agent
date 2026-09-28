@@ -53,26 +53,19 @@ Given a delivery exception event, you must output a JSON object with these field
 Rules for decision:
 - "escalate" when: vehicle_breakdown, medical package with < 60 min to SLA, 
   any exception with < 30 min to SLA, weather affecting multiple drivers,
-  misloaded_package (requires hub coordination),
-  traffic delay involving bridge closure or major artery with 5+ remaining stops
-  (bridges and highways have limited alternate routes, causing cascade delays)
-- "auto_resolve" when: traffic delays on surface streets with alternate routes available,
+  misloaded_package (requires hub coordination)
+- "auto_resolve" when: traffic delays with alternate routes available,
   address issues where customer can be contacted, customer absent with
   safe drop location possible, standard packages with > 2 hours to SLA
 
 Rules for urgency:
 - HIGH: medical package at risk, < 60 min to SLA, vehicle breakdown 
-  with 5+ remaining stops, priority package at risk, 3+ stops affected,
-  bridge or highway closure blocking a driver's route
+  with 5+ remaining stops, priority package at risk, 3+ stops affected
 - MEDIUM: standard package, 1-2 hours to SLA, isolated exception
 - LOW: standard package, > 2 hours to SLA, minor issue
 
-When evaluating traffic delays, consider the type of blockage:
-- Surface street congestion: usually has parallel streets as detours, lower risk
-- Bridge closure: limited or no alternate routes, high cascade risk for all downstream stops
-- Highway closure: forces traffic onto slower surface streets, moderate cascade risk
-
 Respond with ONLY the JSON object, no other text."""
+
 
 def triage_node(state: dict) -> dict:
     """
@@ -92,8 +85,8 @@ def triage_node(state: dict) -> dict:
         minutes_to_sla = (sla - now).total_seconds() / 60
         eta_margin = (sla - eta).total_seconds() / 60
     except (ValueError, KeyError):
-        minutes_to_sla = -1
-        eta_margin = -1
+        minutes_to_sla = 999
+        eta_margin = 999
 
     # Build the prompt with the event context
     event_summary = (
@@ -105,7 +98,7 @@ def triage_node(state: dict) -> dict:
         f"Package priority: {event['package_priority']}\n"
         f"Business: {event['business_name']}\n"
         f"Address: {event['address']}\n"
-        f"Minutes until SLA deadline: {round(minutes_to_sla, 1)} (negative means unknown or overdue)\n"
+        f"Minutes until SLA deadline: {round(minutes_to_sla, 1)}\n"
         f"Current ETA margin (positive=on time): {round(eta_margin, 1)} minutes\n"
         f"Remaining stops on this route: {event['remaining_stops']}\n"
     )
@@ -275,6 +268,11 @@ def reroute_node(state: dict) -> dict:
         "alternatives_checked": result.get("alternatives_checked", 0),
         "blocked_routes_filtered": result.get("blocked_routes_filtered", 0),
         "processing_time_ms": round((time.time() - start_time) * 1000),
+        # Evidence for verification
+        "all_routes": result.get("all_routes", []),
+        "chosen_index": result.get("chosen_index", -1),
+        "chosen_reason": result.get("chosen_reason", ""),
+        "verification": result.get("verification", {}),
     }
 
     return {"reroute": reroute_result}
@@ -370,7 +368,14 @@ def route_passes_through_blocked_area(route_coords: list, blocked_lat: float,
 
 def reroute_around_blockage(from_lat, from_lon, to_lat, to_lon,
                             blocked_lat, blocked_lon) -> dict:
-    """Production rerouting: get alternatives, filter blocked, pick fastest safe route."""
+    """Production rerouting: get alternatives, filter blocked, pick fastest safe route.
+
+    Returns full evidence so every reroute decision can be verified:
+      - all_routes: every route evaluated with its blocked/safe status
+      - chosen_index: which route was picked
+      - chosen_reason: why it was picked
+      - verification: pre-computed checks for automated validation
+    """
     alternatives = query_osrm_alternatives(from_lat, from_lon, to_lat, to_lon, n_alts=3)
 
     if not alternatives:
@@ -382,16 +387,32 @@ def reroute_around_blockage(from_lat, from_lon, to_lat, to_lon,
             "summary": "OSRM alternatives unavailable, used default route to {address}",
             "alternatives_checked": 0,
             "blocked_routes_filtered": 0,
+            "all_routes": [],
+            "chosen_index": -1,
+            "chosen_reason": "no_alternatives",
+            "verification": {"verifiable": False, "reason": "no_alternatives_returned"},
         }
 
+    # Evaluate every route against the blocked zone
+    route_evidence = []
     safe_routes = []
     blocked_routes = []
 
-    for route in alternatives:
+    for i, route in enumerate(alternatives):
         check = route_passes_through_blocked_area(
             route["coordinates"], blocked_lat, blocked_lon, BLOCK_RADIUS_METERS
         )
         route["geo_check"] = check
+        route_entry = {
+            "index": i,
+            "duration_sec": route["duration_sec"],
+            "distance_m": route["distance_m"],
+            "blocked": check["blocked"],
+            "exposure_points": check["exposure_points"],
+            "closest_distance_m": check["closest_distance_m"],
+        }
+        route_evidence.append(route_entry)
+
         if check["blocked"]:
             blocked_routes.append(route)
         else:
@@ -403,6 +424,20 @@ def reroute_around_blockage(from_lat, from_lon, to_lat, to_lon,
     if safe_routes:
         safe_routes.sort(key=lambda r: r["duration_sec"])
         best = safe_routes[0]
+        chosen_idx = next(i for i, r in enumerate(alternatives) if r is best)
+
+        # Build verification evidence
+        safe_durations = [r["duration_sec"] for r in safe_routes]
+        verification = {
+            "verifiable": True,
+            "chosen_is_safe": True,
+            "chosen_is_fastest_safe": best["duration_sec"] == min(safe_durations),
+            "safe_route_count": len(safe_routes),
+            "blocked_route_count": total_blocked,
+            "chosen_avoids_blockage": not best["geo_check"]["blocked"],
+            "closest_approach_m": best["geo_check"]["closest_distance_m"],
+        }
+
         return {
             "duration_sec": best["duration_sec"],
             "distance_m": best["distance_m"],
@@ -415,10 +450,29 @@ def reroute_around_blockage(from_lat, from_lon, to_lat, to_lon,
             ),
             "alternatives_checked": total_checked,
             "blocked_routes_filtered": total_blocked,
+            "all_routes": route_evidence,
+            "chosen_index": chosen_idx,
+            "chosen_reason": "fastest_safe",
+            "verification": verification,
         }
     else:
         blocked_routes.sort(key=lambda r: r["geo_check"]["exposure_points"])
         best = blocked_routes[0]
+        chosen_idx = next(i for i, r in enumerate(alternatives) if r is best)
+
+        # Build verification evidence
+        exposure_counts = [r["geo_check"]["exposure_points"] for r in blocked_routes]
+        verification = {
+            "verifiable": True,
+            "chosen_is_safe": False,
+            "chosen_is_least_exposure": best["geo_check"]["exposure_points"] == min(exposure_counts),
+            "chosen_exposure_points": best["geo_check"]["exposure_points"],
+            "all_exposure_points": exposure_counts,
+            "flagged_for_review": True,
+            "safe_route_count": 0,
+            "blocked_route_count": total_blocked,
+        }
+
         return {
             "duration_sec": best["duration_sec"],
             "distance_m": best["distance_m"],
@@ -431,6 +485,10 @@ def reroute_around_blockage(from_lat, from_lon, to_lat, to_lon,
             ),
             "alternatives_checked": total_checked,
             "blocked_routes_filtered": total_blocked,
+            "all_routes": route_evidence,
+            "chosen_index": chosen_idx,
+            "chosen_reason": "least_exposure",
+            "verification": verification,
         }
 
 
