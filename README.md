@@ -54,6 +54,8 @@ For traffic delays, the reroute agent uses a production pattern rather than a si
 
 For address issues, the system defers the delivery to the end of the route and estimates a retry time. For customer absent, it marks the delivery as pending retry with no fake ETA since the retry depends on customer availability.
 
+Every reroute decision now returns full evidence: all routes evaluated, which were blocked, which were safe, why the chosen one was picked, and pre-computed verification checks. This means every single reroute can be verified after the fact, not just trusted.
+
 ## Triage Agent: LLM Decision Making
 
 The triage node sends the exception context to Claude (via LangChain) with a structured system prompt defining three urgency levels (HIGH, MEDIUM, LOW) and two decision paths (auto_resolve, escalate).
@@ -96,12 +98,37 @@ Average latency:     2.9s per event
 
 The two misses were both edge cases where the LLM classified one urgency level differently than our ground truth. After reviewing the LLM's reasoning, we updated the ground truth labels in cases where the LLM's assessment was more defensible than ours. This iterative process of running evals, reviewing disagreements, and deciding whether to fix the label or the prompt is the standard workflow for production LLM evaluation.
 
-## Live Dispatcher Dashboard
+## Reroute Verification
 
-The dashboard is a FastAPI backend serving a single HTML page with WebSocket for real time updates and Leaflet.js for the map.
+The triage eval verifies the LLM's macro decision (auto resolve vs escalate). The reroute verification goes a level deeper: it checks whether every route the system chose was actually correct.
+
+`verify_reroutes.py` runs every exception event from the manifest through the full LangGraph pipeline and verifies each reroute decision using the evidence the reroute node now returns:
+
+| Check | What it verifies |
+|---|---|
+| `chosen_avoids_blockage` | The picked route does not intersect the 200m blocked zone |
+| `chosen_is_fastest_safe` | No other safe route had a shorter duration |
+| `chosen_is_least_exposure` | If all routes were blocked, the one with the fewest geometry points inside the danger zone was selected |
+| `flagged_for_manual_review` | If no safe route exists, the event is flagged for the dispatcher instead of silently sending the driver through |
+| `speed_plausible` | Average speed on the chosen route is between 10 and 80 km/h (realistic for SF city streets) |
+| `longer_than_straight_line` | Driving distance exceeds straight line distance, confirming OSRM returned real road geometry and not an approximation |
+
+The verification also runs automatically inside the live pipeline. Every reroute result carries its own `verification` object with pre-computed checks, so the dashboard backend can log warnings in real time without making extra OSRM calls.
+
+**Reroute Verification Scorecard:**
+
+```
+Events processed:    10
+Rerouted events:     7
+Escalated (no route): 3
+Checks passed:       10/10 (100.0%)
+```
+
 ## Live Dispatcher Dashboard
 
 ![Dispatcher Dashboard](assets/dashboard.jpeg)
+
+The dashboard is a FastAPI backend serving a single HTML page with WebSocket for real time updates and Leaflet.js for the map.
 
 **Four panels:**
 
@@ -134,7 +161,7 @@ Every graph invocation traces automatically to LangSmith, showing the full execu
 | Dashboard backend | FastAPI with WebSocket |
 | Dashboard frontend | Leaflet.js on OpenStreetMap tiles |
 | Observability | LangSmith tracing |
-| Evaluation | 27 case golden dataset with automated scoring |
+| Evaluation | 27 case golden dataset + reroute verification with automated scoring |
 
 ## How to Run
 
@@ -162,8 +189,11 @@ uvicorn dashboard.app:app --port 8000
 # Publish events to Redis (separate terminal)
 python scripts/event_producer.py --flush --mode simulate --interval 5
 
-# Run evaluation
+# Run triage evaluation
 python evals/run_eval.py --verbose
+
+# Run reroute verification
+python evals/verify_reroutes.py --verbose
 ```
 
 ## Project Structure
@@ -186,7 +216,8 @@ delivery-copilot/
 │   └── index.html            Leaflet map and live UI
 ├── evals/
 │   ├── golden_dataset.py     27 handcrafted test cases with ground truth
-│   └── run_eval.py           Runs eval and prints scorecard
+│   ├── run_eval.py           Runs triage eval and prints scorecard
+│   └── verify_reroutes.py    Runs every event through the pipeline and verifies each reroute
 ├── data/                     Manifest and address data (gitignored)
 ├── docker-compose.yml        OSRM and Redis services
 ├── requirements.txt
