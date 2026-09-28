@@ -99,6 +99,9 @@ The two misses were both edge cases where the LLM classified one urgency level d
 ## Live Dispatcher Dashboard
 
 The dashboard is a FastAPI backend serving a single HTML page with WebSocket for real time updates and Leaflet.js for the map.
+## Live Dispatcher Dashboard
+
+![Dispatcher Dashboard](assets/dashboard.jpeg)
 
 **Four panels:**
 
